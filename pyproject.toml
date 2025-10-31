@@ -1,0 +1,13 @@
+[project]
+name = "phm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "lazypredict>=0.2.16",
+    "lightgbm>=4.6.0",
+    "pandas>=2.3.3",
+    "scikit-learn>=1.7.2",
+    "xgboost>=3.1.1",
+]

@@ -12,7 +12,7 @@ CSV_FILENAME = "./training_data.csv"
 
 # Subsetting options (use one of the following)
 # Option A: Limit the number of rows read (fast, simplest). Set to None to read all.
-MAX_ROWS = 10000  # e.g., 100_000 rows; set None to disable
+MAX_ROWS = 100000  # e.g., 100_000 rows; set None to disable
 
 # Option B: Sample a fraction per chunk while reading (memory-friendly for huge files).
 # Set CHUNK_SAMPLE_FRAC to a value between 0 and 1 (e.g., 0.1 for ~10%). Set to None to disable.

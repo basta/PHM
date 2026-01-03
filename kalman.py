@@ -16,11 +16,24 @@ def _():
 
 
 @app.cell
-def _(pd, target):
+def _(features, pd, target):
     df = pd.read_csv("training_data.csv")
     df = df.dropna(subset=[target])
-    df
-    return (df,)
+
+    # Sort and offset cycles to distinguish snapshots
+    df = df.sort_values(["ESN", "Cycles_Since_New"])
+    df["Cycles_Since_New"] = (
+        df["Cycles_Since_New"]
+        + df.groupby(["ESN", "Cycles_Since_New"]).cumcount() * 0.1
+    )
+
+    # Filter outliers from the entire df
+    for col in [target] + features:
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
+        IQR = Q3 - Q1
+        df = df[(df[col] >= Q1 - 1.5 * IQR) & (df[col] <= Q3 + 1.5 * IQR)]
+    return IQR, Q1, Q3, col, df
 
 
 @app.cell
@@ -38,21 +51,23 @@ def _():
 
 
 @app.cell
-def _(LinearRegression, SimpleImputer, df, features, target):
-    df_healthy = df[df["Cycles_Since_New"] <= 200].copy()
+def _(IQR, LinearRegression, Q1, Q3, SimpleImputer, col, df, features, target):
+    df_pred = df.copy()
+    df_healthy = df_pred[df_pred["Cycles_Since_New"] <= 200].copy()
     print(f"Training baseline on {len(df_healthy)} healthy snapshots.")
 
     model = LinearRegression()
     imputer = SimpleImputer(strategy="mean")
     df_healthy = df_healthy.dropna(subset=[target])
 
-    # Filter outliers using IQR
-    Q1 = df_healthy[target].quantile(0.25)
-    Q3 = df_healthy[target].quantile(0.75)
-    IQR = Q3 - Q1
-    df_healthy = df_healthy[
-        (df_healthy[target] >= Q1 - 1.5 * IQR) & (df_healthy[target] <= Q3 + 1.5 * IQR)
-    ]
+    # Filter outliers using IQR for target AND features
+    for _col in [target] + features:
+        _Q1 = df_healthy[_col].quantile(0.25)
+        _Q3 = df_healthy[_col].quantile(0.75)
+        _IQR = _Q3 - _Q1
+        df_healthy = df_healthy[
+            (df_healthy[col] >= Q1 - 1.5 * IQR) & (df_healthy[col] <= Q3 + 1.5 * IQR)
+        ]
 
     # Fit imputer on healthy data and transform
     X_train = imputer.fit_transform(df_healthy[features])
@@ -61,16 +76,16 @@ def _(LinearRegression, SimpleImputer, df, features, target):
     # Predict what T45 *should* be for the entire dataset
     # This effectively normalizes the data for Altitude, Mach, and Throttle differences
     # Transform full dataset features using the same imputer
-    X_full = imputer.transform(df[features])
-    df["T45_Predicted"] = model.predict(X_full)
+    X_full = imputer.transform(df_pred[features])
+    df_pred["T45_Predicted"] = model.predict(X_full)
 
     # Calculate the Residual (Innovation)
     # z = y_measured - y_predicted
-    df["T45_Residual"] = df[target] - df["T45_Predicted"]
+    df_pred["T45_Residual"] = df_pred[target] - df_pred["T45_Predicted"]
 
     # View the result
-    df[["Cycles_Since_New", "Sensed_T45", "T45_Predicted", "T45_Residual"]]
-    return (df_healthy,)
+    df_pred[["Cycles_Since_New", "Sensed_T45", "T45_Predicted", "T45_Residual"]]
+    return df_healthy, df_pred
 
 
 @app.cell
@@ -105,15 +120,15 @@ def _(df, mo):
 
 
 @app.cell
-def _(cycle_range, df, esn_select, plt):
+def _(cycle_range, df_pred, esn_select, plt):
     # Filter data based on UI selection
     selected_esn = esn_select.value
     c_min, c_max = cycle_range.value
 
-    df_plot = df[
-        (df["ESN"] == selected_esn)
-        & (df["Cycles_Since_New"] >= c_min)
-        & (df["Cycles_Since_New"] <= c_max)
+    df_plot = df_pred[
+        (df_pred["ESN"] == selected_esn)
+        & (df_pred["Cycles_Since_New"] >= c_min)
+        & (df_pred["Cycles_Since_New"] <= c_max)
     ]
 
     fig, ax = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
@@ -172,7 +187,7 @@ def _(cycle_range, df, esn_select, plt):
     ax[2].grid(True, alpha=0.3)
 
     plt.tight_layout()
-    #mo.as_html(fig)
+    # mo.as_html(fig)
     return
 
 
@@ -233,7 +248,7 @@ def _(np):
 
 
 @app.cell
-def _(EngineKalmanFilter, df, pd):
+def _(EngineKalmanFilter, df_pred, pd):
     def process_engine_kf(df_engine):
         # Initialize Filter
         # You might need to tune 'process_noise' if the line is too stiff or too wiggly
@@ -269,7 +284,7 @@ def _(EngineKalmanFilter, df, pd):
 
     # Apply to the dataframe (Group by ESN first!)
     # We create new columns to store the KF results
-    results = df.groupby("ESN").apply(
+    results = df_pred.groupby("ESN").apply(
         lambda x: pd.DataFrame(
             zip(*process_engine_kf(x)),
             columns=["KF_Health", "KF_Slope", "KF_Var"],
@@ -280,14 +295,8 @@ def _(EngineKalmanFilter, df, pd):
     results = results.reset_index(level=0, drop=True)
 
     # Merge back into original dataframe
-    df_results = df.join(results)
+    df_results = df_pred.join(results)
     return (df_results,)
-
-
-@app.cell
-def _(df_results):
-    df_results
-    return
 
 
 @app.cell
@@ -324,7 +333,7 @@ def _(cycle_range, df_results, esn_select, mo, plt):
         ax[0].set_ylabel("Health Degradation")
         ax[0].legend()
         ax[0].grid(True, alpha=0.3)
-        ax[0].set_ylim(0,200)
+        ax[0].set_ylim(0, 200)
 
         # Plot 2: The Slope (Degradation Rate)
         # This is what you use to predict RUL!
@@ -339,7 +348,7 @@ def _(cycle_range, df_results, esn_select, mo, plt):
         ax[1].axhline(0, color="black", linestyle="--")  # Slope should be positive
         ax[1].legend()
         ax[1].grid(True, alpha=0.3)
-        ax[1].set_ylim(-1,1)
+        ax[1].set_ylim(-1, 1)
 
         # Plot 3: Maintenance Events (Reference)
         ax[2].plot(
@@ -361,7 +370,7 @@ def _(cycle_range, df_results, esn_select, mo, plt):
         plt.tight_layout()
         return mo.as_html(fig)
 
-    _()
+    #_()
     return
 
 

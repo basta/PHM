@@ -194,7 +194,7 @@ def _(cycle_range, df_pred, esn_select, plt):
 @app.cell
 def _(np):
     class EngineKalmanFilter:
-        def __init__(self, dt=1.0, process_noise=1e-5, meas_noise=5.0):
+        def __init__(self, dt=1.0, process_noise=1e-7, meas_noise=1.0):
             # State: [Health (Residual), Degradation_Rate]
             self.x = np.zeros((2, 1))
 
@@ -370,7 +370,135 @@ def _(cycle_range, df_results, esn_select, mo, plt):
         plt.tight_layout()
         return mo.as_html(fig)
 
-    #_()
+    _()
+    return
+
+
+@app.cell
+def _(df_pred, esn_select, mo):
+    # Tuning UI
+    def get_events():
+        _esn = esn_select.value
+        _df = df_pred[df_pred["ESN"] == _esn].sort_values("Cycles_Since_New")
+
+        _events = []
+        for _col in ["Cumulative_WWs", "Cumulative_HPC_SVs", "Cumulative_HPT_SVs"]:
+            # Check for diff > 0
+            _change_mask = _df[_col].diff() > 0
+            _change_rows = _df[_change_mask]
+            for _, _row in _change_rows.iterrows():
+                _events.append(
+                    (_row["Cycles_Since_New"], _col.replace("Cumulative_", ""))
+                )
+
+        _events.sort(key=lambda x: x[0])
+        return _events
+
+    _events_list = get_events()
+    _event_options = {
+        f"{kind} (Cycle {int(cyc)})": int(cyc) for cyc, kind in _events_list
+    }
+    if not _event_options:
+        _event_options = {"No Events": 0}
+
+    # Helper to get the first value safely
+    _default_val = "WWs (Cycle 920)"
+    event_select = mo.ui.dropdown(
+        options=_event_options, value=_default_val, label="Focus on Event"
+    )
+    noise_slider = mo.ui.slider(
+        start=-6.0, stop=1.0, step=0.1, value=-5.0, label="Log10 Process Noise"
+    )
+
+    mo.vstack(
+        [
+            mo.md("### Tuning Process Noise"),
+            mo.md(
+                "Adjust the noise to see how the filter tracks the residual before an event."
+            ),
+            noise_slider,
+            event_select,
+        ]
+    )
+    return event_select, noise_slider
+
+
+@app.cell
+def _(
+    EngineKalmanFilter,
+    df_pred,
+    esn_select,
+    event_select,
+    noise_slider,
+    plt,
+):
+    # Run KF with tuned parameters on the fly
+    _esn = esn_select.value
+    _process_noise = 10**noise_slider.value
+    _focus_cycle = event_select.value
+
+    _df_plot = df_pred[df_pred["ESN"] == _esn].sort_values("Cycles_Since_New")
+
+    # Run Filter
+    _kf = EngineKalmanFilter(process_noise=_process_noise, meas_noise=10.0)
+
+    _kf_health = []
+    _prev_ww = _df_plot.iloc[0]["Cumulative_WWs"]
+
+    for _i, _row in _df_plot.iterrows():
+        _z = _row["T45_Residual"]
+        _curr_ww = _row["Cumulative_WWs"]
+
+        _kf.predict()
+        if _curr_ww > _prev_ww:
+            _kf.handle_maintenance(_z)
+            _prev_ww = _curr_ww
+
+        _state = _kf.update(_z)
+        _kf_health.append(_state[0])
+
+    _df_plot["KF_Health_Tuned"] = _kf_health
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+
+    # Zoom logic. Handle None safely.
+    if _focus_cycle is not None and _focus_cycle > 0:
+        _start = max(0, _focus_cycle - 500)
+        _end = _focus_cycle + 20
+        _subset = _df_plot[
+            (_df_plot["Cycles_Since_New"] >= _start)
+            & (_df_plot["Cycles_Since_New"] <= _end)
+        ]
+        plt.title(f"Tracking before {_esn} Event at Cycle {_focus_cycle}")
+    else:
+        _subset = _df_plot
+        plt.title(f"Full Tracking for {_esn}")
+
+    plt.plot(
+        _subset["Cycles_Since_New"],
+        _subset["T45_Residual"],
+        ".",
+        color="gray",
+        alpha=0.5,
+        label="Measurements",
+    )
+    plt.plot(
+        _subset["Cycles_Since_New"],
+        _subset["KF_Health_Tuned"],
+        color="red",
+        linewidth=2,
+        label=f"KF (Noise=10^{noise_slider.value:.1f})",
+    )
+
+    if _focus_cycle is not None and _focus_cycle > 0:
+        plt.axvline(_focus_cycle, color="black", linestyle="--", label="Ref Event")
+
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.ylabel("Health (Residual)")
+    plt.xlabel("Cycles")
+    plt.gca()
     return
 
 

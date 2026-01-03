@@ -16,18 +16,22 @@ def _():
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_squared_error
     import seaborn as sns
+    from sklearn.preprocessing import PolynomialFeatures
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import Pipeline
 
     # Set styling
     plt.style.use("seaborn-v0_8-darkgrid")
     return (
-        LinearRegression,
+        Pipeline,
+        PolynomialFeatures,
         RandomForestRegressor,
+        Ridge,
         SimpleImputer,
         mo,
         np,
         pd,
         plt,
-        train_test_split,
     )
 
 
@@ -115,21 +119,36 @@ def _():
     # Sensors to Monitor (Targets for Baseline -> Inputs for KF)
     # We chose sensors relevant to both Compressors (HPC) and Turbines (HPT)
     target_sensors = [
-        "Sensed_T45",  # HPT Exit (Key for Hot Section)
+        "Ratio_T45_TAT",  # HPT Exit (Key for Hot Section)
         "Sensed_T3",  # HPC Exit (Key for Compressor)
-        "Sensed_Ps3",  # HPC Static Pressure
+        "Ratio_Ps3_Pamb",  # HPC Static Pressure
         "Sensed_T5",  # EGT (General Health)
+        "Sensed_T25",
+        "Sensed_P25",
     ]
     return env_features, target_sensors
 
 
 @app.cell
-def _(LinearRegression, SimpleImputer, env_features, pd, target_sensors):
+def _(
+    Pipeline,
+    PolynomialFeatures,
+    Ridge,
+    SimpleImputer,
+    env_features,
+    pd,
+    target_sensors,
+):
     # Data Processing Pipeline
     df_raw = pd.read_csv("training_data.csv")
     df_raw = df_raw.dropna()
 
+    epsilon = 1e-6
+
     df_processed = df_raw.copy()
+    df_processed["Ratio_Ps3_Pamb"] = df_processed["Sensed_Ps3"] / (df_processed["Sensed_Pamb"] + epsilon)
+
+    df_processed["Ratio_T45_TAT"] = df_processed["Sensed_T45"] / (df_processed["Sensed_TAT"] + 273.15)
 
     if not df_processed.empty:
         # 1. Sort
@@ -148,11 +167,19 @@ def _(LinearRegression, SimpleImputer, env_features, pd, target_sensors):
         print("Calculating Baseline Residuals...")
         for sensor in target_sensors:
             # Fit model: Env Features -> Sensor Value
-            model = LinearRegression()
-            model.fit(baseline_data[env_features], baseline_data[sensor])
+            # model = LinearRegression()
+            # model.fit(baseline_data[env_features], baseline_data[sensor])
 
-            # Predict "Expected" Value
-            predicted = model.predict(df_processed[env_features])
+            # # Predict "Expected" Value
+            # predicted = model.predict(df_processed[env_features])
+
+            poly = Pipeline([
+                ('poly', PolynomialFeatures(degree=2, include_bias=False)),
+                ('reg', Ridge(alpha=1.0)) # Ridge is Linear Regression with L2 regularization
+            ])
+        
+            poly.fit(baseline_data[env_features], baseline_data[sensor])
+            predicted = poly.predict(df_processed[env_features])
 
             # Residual = Measured - Expected
             # This isolates degradation from operating conditions
@@ -285,11 +312,11 @@ def _(
     df_full,
     mo,
     np,
+    pd,
     score_submitted_result,
     target_sensors,
-    train_test_split,
 ):
-    # Train the RUL Regressors
+    # Train the RUL Regressors using Leave-One-Group-Out (LOGO) CV
 
     # 1. Define Features (X)
     # We use the KF outputs for ALL sensors
@@ -308,41 +335,63 @@ def _(
     if not df_full.empty and all(c in df_full.columns for c in target_cols):
         # Drop rows where targets are NaN (if any)
         df_train_clean = df_full.dropna(subset=target_cols + feature_cols)
+        unique_esns = sorted(df_train_clean["ESN"].unique())
 
-        X = df_train_clean[feature_cols]
-        y = df_train_clean[target_cols]
+        print(f"Starting LOGO-CV on {len(unique_esns)} engines...")
 
-        # Split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        fold_scores = []
 
-        # Train 3 Separate Regressors
-        # We use RandomForest because RUL degradation is often non-linear near end-of-life
-        # and it handles interactions between 'Slope' and 'Health' well.
+        # -- LOCO Loop --
+        for test_esn in unique_esns:
+            train_mask = df_train_clean["ESN"] != test_esn
+            test_mask = df_train_clean["ESN"] == test_esn
 
-        y_pred_test = y_test.copy()
+            X_train = df_train_clean.loc[train_mask, feature_cols]
+            y_train = df_train_clean.loc[train_mask, target_cols]
+            X_test = df_train_clean.loc[test_mask, feature_cols]
+            y_test = df_train_clean.loc[test_mask, target_cols]
+
+            # Train temporary models for this fold
+            y_pred_fold = y_test.copy()
+            for target in target_cols:
+                rf = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
+                rf.fit(X_train, y_train[target])
+                y_pred_fold[target] = rf.predict(X_test)
+
+            # Evaluate
+            s = score_submitted_result(y_test, y_pred_fold)
+            s["ESN"] = test_esn
+            s["Final"] = np.mean(list(s.values()))
+            fold_scores.append(s)
+
+        # -- Aggregation --
+        df_scores = pd.DataFrame(fold_scores).set_index("ESN")
+        mean_scores = df_scores.mean(numeric_only=True)
+
+        # -- Final Training (for Dashboard) --
+        # We train on ALL data so the dashboard uses the best possible model
+        X_all = df_train_clean[feature_cols]
+        y_all = df_train_clean[target_cols]
 
         for target in target_cols:
-            print(f"Training model for {target}...")
-            # N_estimators=50 for speed in demo, increase to 200+ for competition
             rf = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
-            rf.fit(X_train, y_train[target])
+            rf.fit(X_all, y_all[target])
             models[target] = rf
 
-            y_pred_test[target] = rf.predict(X_test)
-
-        # Evaluation using Official Metric
-        scores = score_submitted_result(y_test, y_pred_test)
-
+        # -- Reporting --
         scores_text = f"""
-        ### Evaluation Results (Official Metric)
-        | Target | Time-Weighted Score (Lower is better) |
-        | :--- | :--- |
-        | **Water Wash** | {scores.get("WW", 0):.4f} |
-        | **HPC Visit** | {scores.get("HPC", 0):.4f} |
-        | **HPT Visit** | {scores.get("HPT", 0):.4f} |
-        | **FINAL SCORE** | **{np.mean(list(scores.values())):.4f}** |
+        ### LOGO-CV Evaluation Results (Mean over {len(unique_esns)} folds)
+
+        | Target | Mean Score (Lower is better) | Std Dev |
+        | :--- | :--- | :--- |
+        | **Water Wash** | {mean_scores.get("WW", 0):.4f} | {df_scores["WW"].std():.4f} |
+        | **HPC Visit** | {mean_scores.get("HPC", 0):.4f} | {df_scores["HPC"].std():.4f} |
+        | **HPT Visit** | {mean_scores.get("HPT", 0):.4f} | {df_scores["HPT"].std():.4f} |
+        | **FINAL SCORE** | **{mean_scores.get("Final", 0):.4f}** | **{df_scores["Final"].std():.4f}** |
+
+        #### Per-Engine Breakdown
+
+        {df_scores.round(4).to_markdown()}
         """
 
     mo.md(scores_text)

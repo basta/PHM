@@ -19,6 +19,7 @@ def _():
     from sklearn.preprocessing import PolynomialFeatures
     from sklearn.linear_model import Ridge
     from sklearn.pipeline import Pipeline
+    from sklearn.linear_model import ElasticNetCV
 
     # Set styling
     plt.style.use("seaborn-v0_8-darkgrid")
@@ -46,23 +47,7 @@ def _(mo):
 
 @app.cell
 def _(np):
-    def time_weighted_error(y_true, y_pred, alpha=0.02, beta=1):
-        """
-        Official Asymmetric Scoring Function.
-        Late predictions (error >= 0) are penalized 2x more than early predictions.
-        """
-        # Ensure numpy arrays
-        y_true = np.array(y_true)
-        y_pred = np.array(y_pred)
-
-        error = y_pred - y_true
-
-        # Weight calculation based on proximity to event (y_true)
-        # and direction of error (late vs early)
-        weight = np.where(
-            error >= 0, 2 / (1 + alpha * y_true), 1 / (1 + alpha * y_true)
-        )
-        return weight * (error**2) * beta
+    from src.metrics import time_weighted_error
 
     def score_submitted_result(df_true, df_pred):
         """
@@ -106,26 +91,7 @@ def _(np):
 
 @app.cell
 def _():
-    # We will define the sensor config here
-    # Operating Condition Features (Inputs to Baseline Model)
-    env_features = [
-        "Sensed_WFuel",
-        "Sensed_Altitude",
-        "Sensed_Mach",
-        "Sensed_Pamb",
-        "Sensed_TAT",
-    ]
-
-    # Sensors to Monitor (Targets for Baseline -> Inputs for KF)
-    # We chose sensors relevant to both Compressors (HPC) and Turbines (HPT)
-    target_sensors = [
-        "Ratio_T45_TAT",  # HPT Exit (Key for Hot Section)
-        "Sensed_T3",  # HPC Exit (Key for Compressor)
-        "Ratio_Ps3_Pamb",  # HPC Static Pressure
-        "Sensed_T5",  # EGT (General Health)
-        "Sensed_T25",
-        "Sensed_P25",
-    ]
+    from src.kalman_utils import env_features, target_sensors
     return env_features, target_sensors
 
 
@@ -177,7 +143,7 @@ def _(
                 ('poly', PolynomialFeatures(degree=2, include_bias=False)),
                 ('reg', Ridge(alpha=1.0)) # Ridge is Linear Regression with L2 regularization
             ])
-        
+
             poly.fit(baseline_data[env_features], baseline_data[sensor])
             predicted = poly.predict(df_processed[env_features])
 
@@ -190,106 +156,17 @@ def _(
 
 
 @app.cell
-def _(np):
-    # Robust Kalman Filter Implementation
-    class RobustKalmanFilter:
-        def __init__(self, dt=1.0, process_noise=1e-5, meas_noise=10.0):
-            # State: [Health (Level), Degradation_Rate (Slope)]
-            self.x = np.zeros((2, 1))
-            self.P = np.eye(2) * 100.0
-            self.F = np.array([[1.0, dt], [0.0, 1.0]])  # Constant Velocity
-            self.H = np.array([[1.0, 0.0]])  # Measure Position only
-
-            # Tuning
-            self.Q = np.array(
-                [
-                    [process_noise, 0.0],
-                    [0.0, process_noise * 0.01],  # Slope changes slower than position
-                ]
-            )
-            self.R = np.array([[meas_noise]])
-
-        def predict(self):
-            self.x = self.F @ self.x
-            self.P = self.F @ self.P @ self.F.T + self.Q
-            return self.x.flatten()
-
-        def update(self, z):
-            y = z - (self.H @ self.x)
-            S = self.H @ self.P @ self.H.T + self.R
-            K = self.P @ self.H.T @ np.linalg.inv(S)
-            self.x = self.x + (K @ y)
-            self.P = (np.eye(2) - K @ self.H) @ self.P
-            return self.x.flatten()
-
-        def handle_maintenance(self, z_new, keep_slope=True):
-            """
-            Reset Health, but optionally keep knowledge of degradation rate.
-            """
-            old_slope = self.x[1, 0]
-            self.x = np.zeros((2, 1))
-            self.x[0, 0] = z_new
-            if keep_slope:
-                self.x[1, 0] = old_slope  # Assume degradation physics hasn't changed
-
-            # Reset Variance to allow rapid convergence to new state
-            self.P = np.eye(2) * 50.0
-    return (RobustKalmanFilter,)
+def _():
+    from src.kalman_utils import RobustKalmanFilter
+    return
 
 
 @app.cell
-def _(RobustKalmanFilter, df_processed, pd, target_sensors):
+def _(df_processed, pd):
+    from src.kalman_utils import process_multisensor_kf
+
     # Apply KF to Multiple Sensors
     # This creates our Feature Vector for the Regressor
-
-    def process_multisensor_kf(df_engine):
-        # Dictionary to store results for this engine
-        kf_outputs = {}
-
-        # Initialize one KF per sensor
-        kfs = {
-            s: RobustKalmanFilter(process_noise=1e-4, meas_noise=5.0)
-            for s in target_sensors
-        }
-
-        # Track Maintenance to trigger resets
-        prev_ww = df_engine.iloc[0]["Cumulative_WWs"]
-        prev_hpc = df_engine.iloc[0]["Cumulative_HPC_SVs"]
-
-        # Storage lists
-        results = {s: {"health": [], "slope": []} for s in target_sensors}
-
-        for idx, row in df_engine.iterrows():
-            curr_ww = row["Cumulative_WWs"]
-            curr_hpc = row["Cumulative_HPC_SVs"]
-
-            # Detect Event
-            is_maintenance = (curr_ww > prev_ww) or (curr_hpc > prev_hpc)
-
-            for sensor in target_sensors:
-                z = row[f"Res_{sensor}"]
-                kf = kfs[sensor]
-
-                kf.predict()
-
-                if is_maintenance:
-                    # Reset KF state to new measurement
-                    kf.handle_maintenance(z)
-
-                state = kf.update(z)
-                results[sensor]["health"].append(state[0])
-                results[sensor]["slope"].append(state[1])
-
-            prev_ww = curr_ww
-            prev_hpc = curr_hpc
-
-        # Flatten into dataframe columns
-        out_df = pd.DataFrame(index=df_engine.index)
-        for sensor in target_sensors:
-            out_df[f"KF_Health_{sensor}"] = results[sensor]["health"]
-            out_df[f"KF_Slope_{sensor}"] = results[sensor]["slope"]
-
-        return out_df
 
     if not df_processed.empty:
         print("Running Kalman Filters on all engines (this may take a moment)...")
@@ -374,7 +251,7 @@ def _(
         y_all = df_train_clean[target_cols]
 
         for target in target_cols:
-            rf = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
+            rf = RandomForestRegressor(n_estimators=50, max_depth=5, n_jobs=-1)
             rf.fit(X_all, y_all[target])
             models[target] = rf
 
@@ -475,6 +352,11 @@ def _(df_full, esn_select, feature_cols, mo, models, plt, target_cols):
         plot_output = mo.vstack([esn_select, plot_prediction(esn_select.value)])
 
     mo.vstack([mo.md("### 3. Engine Health Dashboard"), plot_output])
+    return
+
+
+@app.cell
+def _():
     return
 
 

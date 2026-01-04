@@ -8,6 +8,7 @@ dependencies = [
     "lazypredict>=0.2.16",
     "lightgbm>=4.6.0",
     "marimo>=0.18.4",
+    "optuna>=4.6.0",
     "pandas>=2.3.3",
     "scikit-learn>=1.7.2",
     "seaborn>=0.13.2",

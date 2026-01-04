@@ -21,6 +21,36 @@ target_sensors = [
     "Sensed_P25",
 ]
 
+
+def clean_sensor_data(df):
+    df_clean = df.copy()
+    sensor_cols = [col for col in df.columns if col.startswith('Sensed_')]
+
+    for col in sensor_cols:
+        # 1. Physical Sanity Check: Remove negative values for non-altitude sensors
+        if df_clean[col].dtype in [float, int] and 'Altitude' not in col:
+            invalid_neg = df_clean[col] < 0
+            if invalid_neg.sum() > 0:
+                df_clean = df_clean[~invalid_neg]
+
+        # 2. Robust Statistical Outlier Removal (IQR)
+        Q1 = df_clean[col].quantile(0.25)
+        Q3 = df_clean[col].quantile(0.75)
+        IQR = Q3 - Q1
+
+        if IQR == 0:
+            continue
+
+        # Using k=6.0 to preserve engine degradation signatures while removing massive errors
+        lower_bound = Q1 - 6.0 * IQR
+        upper_bound = Q3 + 6.0 * IQR
+
+        is_outlier = (df_clean[col] < lower_bound) | (df_clean[col] > upper_bound)
+        if is_outlier.sum() > 0:
+            df_clean = df_clean[~is_outlier]
+
+    return df_clean
+
 class RobustKalmanFilter:
     def __init__(self, dt=1.0, process_noise=1e-6, meas_noise=10.0):
         # State: [Health (Level), Degradation_Rate (Slope)]

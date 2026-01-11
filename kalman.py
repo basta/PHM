@@ -120,74 +120,67 @@ def _(df, mo):
 
 
 @app.cell
-def _(cycle_range, df_pred, esn_select, plt):
-    # Filter data based on UI selection
-    selected_esn = esn_select.value
-    c_min, c_max = cycle_range.value
+def _(cycle_range, df_pred, esn_select, mo, plt):
+    def _():
+        # Filter data based on UI selection
+        selected_esn = esn_select.value
+        c_min, c_max = cycle_range.value
 
-    df_plot = df_pred[
-        (df_pred["ESN"] == selected_esn)
-        & (df_pred["Cycles_Since_New"] >= c_min)
-        & (df_pred["Cycles_Since_New"] <= c_max)
-    ]
+        df_plot = df_pred[
+            (df_pred["ESN"] == selected_esn)
+            & (df_pred["Cycles_Since_New"] >= c_min)
+            & (df_pred["Cycles_Since_New"] <= c_max)
+        ]
+        with plt.style.context({'font.size': 20, 'axes.titlesize': 24}):
+            fig, ax = plt.subplots(1, 1, sharex=True, figsize=(12,6))
 
-    fig, ax = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+            # Plot 2: The Residual (The degradation signal)
+            ax.plot(
+                df_plot["Cycles_Since_New"],
+                df_plot["T45_Residual"],
+                label="Residual (Innovation)",
+                color="gray",
+            )
 
-    # Plot 1: Raw Sensor Data
-    ax[0].plot(
-        df_plot["Cycles_Since_New"],
-        df_plot["Sensed_T45"],
-        label="Raw Sensed T45",
-        color="gray",
-        alpha=0.7,
-    )
-    ax[0].plot(
-        df_plot["Cycles_Since_New"],
-        df_plot["T45_Predicted"],
-        label="Baseline Model",
-        color="blue",
-        linestyle="--",
-    )
-    ax[0].set_ylabel("Temp (K)")
-    ax[0].set_title(f"Raw Data vs Healthy Baseline (ESN: {selected_esn})")
-    ax[0].legend()
-    ax[0].grid(True, alpha=0.3)
+            # Detected Events
+            event_types = {
+                "Cumulative_HPC_SVs": ("HPC SV", "green"),
+                "Cumulative_HPT_SVs": ("HPT SV", "purple"),
+            }
 
-    # Plot 2: The Residual (The degradation signal)
-    ax[1].plot(
-        df_plot["Cycles_Since_New"],
-        df_plot["T45_Residual"],
-        label="Residual (Innovation)",
-        color="red",
-    )
-    ax[1].axhline(0, color="black", linestyle="--", linewidth=1)
-    ax[1].set_ylabel("Residual Error")
-    ax[1].set_title("The Degradation Signal")
-    ax[1].legend()
-    ax[1].grid(True, alpha=0.3)
+            for col, (label, color) in event_types.items():
+                # Find where value increases
+                # We use .diff() > 0.
+                # Note: This checks changes within the current plot window.
+                events = df_plot[df_plot[col].diff() > 0]
 
-    # Plot 3: Cumulative Metrics
-    ax[2].plot(
-        df_plot["Cycles_Since_New"], df_plot["Cumulative_WWs"], label="Cumulative WWs"
-    )
-    ax[2].plot(
-        df_plot["Cycles_Since_New"],
-        df_plot["Cumulative_HPC_SVs"],
-        label="Cumulative HPC SVs",
-    )
-    ax[2].plot(
-        df_plot["Cycles_Since_New"],
-        df_plot["Cumulative_HPT_SVs"],
-        label="Cumulative HPT SVs",
-    )
-    ax[2].set_ylabel("Cumulative Count")
-    ax[2].set_xlabel("Cycles Since New")
-    ax[2].set_title("Cumulative Metrics")
-    ax[2].legend()
-    ax[2].grid(True, alpha=0.3)
+                # We use a flag to add the label only once to the legend
+                added_label = False
+                for idx, row in events.iterrows():
+                    lbl = label if not added_label else None
+                    ax.axvline(
+                        row["Cycles_Since_New"],
+                        color=color,
+                        linestyle="--",
+                        alpha=1,
+                        label=lbl,
+                        linewidth=3.5,
+                    )
+                    added_label = True
 
-    plt.tight_layout()
-    # mo.as_html(fig)
+            ax.axhline(0, color="black", linestyle="--", linewidth=1)
+            ax.set_ylabel("Residual Error")
+            # ax.set_title("The Degradation Signal (with Events)")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel("Cycles Since New")
+            ax.set_ylim(-20, 170)
+
+            plt.tight_layout()
+            return mo.as_html(fig)
+
+
+    _()
     return
 
 

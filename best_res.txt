@@ -1,0 +1,42 @@
+uv run python kalman_eval.py --kf_process_noise 0.00009869368861487156 --kf_meas_noise 1.3373501738246785 --smoother_r_variance 48635.81388408792 --smoother_q_variance 0.02498716551435158 --rf_n_estimators 133 --rf_max_depth 19 --plots --plot_dir ./plots_optimized
+Starting Cross-Validation on 4 folds out of 4 total engines
+
+Processing Fold: Test ESN=101, Train ESNs=[np.int64(102), np.int64(103), np.int64(104)]
+  Cycles_to_WW: 12.6959
+  Cycles_to_HPC_SV: 46.2010
+  Cycles_to_HPT_SV: 11.8626
+  Saved plot to ./plots_optimized/eval_101.png
+
+Processing Fold: Test ESN=102, Train ESNs=[np.int64(101), np.int64(103), np.int64(104)]
+  Cycles_to_WW: 14.0817
+  Cycles_to_HPC_SV: 59.1609
+  Cycles_to_HPT_SV: 7.5946
+  Saved plot to ./plots_optimized/eval_102.png
+
+Processing Fold: Test ESN=103, Train ESNs=[np.int64(101), np.int64(102), np.int64(104)]
+  Cycles_to_WW: 13.3288
+  Cycles_to_HPC_SV: 60.9651
+  Cycles_to_HPT_SV: 111.0430
+  Saved plot to ./plots_optimized/eval_103.png
+
+Processing Fold: Test ESN=104, Train ESNs=[np.int64(101), np.int64(102), np.int64(103)]
+  Cycles_to_WW: 13.5538
+  Cycles_to_HPC_SV: 79.8194
+  Cycles_to_HPT_SV: 24.5971
+  Saved plot to ./plots_optimized/eval_104.png
+
+=== Final Cross-Validation Results ===
+|   ESN |   Cycles_to_WW |   Cycles_to_HPC_SV |   Cycles_to_HPT_SV |
+|------:|---------------:|-------------------:|-------------------:|
+|   101 |        12.6959 |            46.201  |           11.8626  |
+|   102 |        14.0817 |            59.1609 |            7.59465 |
+|   103 |        13.3288 |            60.9651 |          111.043   |
+|   104 |        13.5538 |            79.8194 |           24.5971  |
+
+=== Average Scores ===
+|                  |        0 |
+|:-----------------|---------:|
+| ESN              | 102.5    |
+| Cycles_to_WW     |  13.4151 |
+| Cycles_to_HPC_SV |  61.5366 |
+| Cycles_to_HPT_SV |  38.7743 |

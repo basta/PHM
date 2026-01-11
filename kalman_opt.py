@@ -12,12 +12,12 @@ def obj(trial):
         ridge_alpha=1.0, # Could opt, but keeping fixed for now
         
         # Kalman Filter
-        kf_process_noise=trial.suggest_loguniform("kf_process_noise", 1e-6, 1e-2),
-        kf_meas_noise=trial.suggest_loguniform("kf_meas_noise", 1.0, 1000.0),
+        kf_process_noise=trial.suggest_float("kf_process_noise", 1e-6, 1e-2, log=True),
+        kf_meas_noise=trial.suggest_float("kf_meas_noise", 1.0, 1000.0, log=True),
         
         # RUL Smoother
-        smoother_r_variance=trial.suggest_loguniform("smoother_r_variance", 100.0, 50000.0),
-        smoother_q_variance=trial.suggest_loguniform("smoother_q_variance", 0.01, 100.0),
+        smoother_r_variance=trial.suggest_float("smoother_r_variance", 100.0, 50000.0, log=True),
+        smoother_q_variance=trial.suggest_float("smoother_q_variance", 0.01, 100.0, log=True),
         smoother_reset_threshold=15,
         
         # Model
@@ -30,23 +30,11 @@ def obj(trial):
     try:
         df_raw = pd.read_csv("training_data.csv")
         df_raw = df_raw.dropna()
-        # Note: cleaning is done inside evaluate_cv -> preprocess_engine if we added it there, 
-        # but in kalman_eval.py current state, we added clean_sensor_data call in preprocess_engine 
-        # (based on the user's manual edits).
-        # We need to make sure we don't double clean or miss it.
-        # kalman_eval.py loads, cleans, then calls evaluate_cv.
-        # NO, wait. 
-        # In kalman_eval.py:
-        # main() -> loads df_raw -> evaluate_cv(df_raw...)
-        # evaluate_cv -> calls preprocess_engine -> calls clean_sensor_data (as per user edit).
-        # So we just pass raw dataframe here.
     except FileNotFoundError:
         return float('inf')
 
-    # Run CV
-    # We suppress prints to keep output clean, maybe?
-    # For now let it print, it's fine.
-    scores = evaluate_cv(df_raw, hyp, do_plots=False)
+    # Run CV with limit_folds=1 for speed
+    scores = evaluate_cv(df_raw, hyp, do_plots=False, limit_folds=4)
     
     if scores is None:
         return float('inf')

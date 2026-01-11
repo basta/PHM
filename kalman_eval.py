@@ -181,9 +181,14 @@ def apply_smoothing(df, raw_pred_col, hyp: Hyperparameters):
         
     return smoothed_vals
 
-def evaluate_cv(df_raw, hyp: Hyperparameters, do_plots=False, plot_dir="./plots"):
+def evaluate_cv(df_raw, hyp: Hyperparameters, do_plots=False, plot_dir="./plots", limit_folds=None):
     unique_esns = sorted(df_raw["ESN"].unique())
-    print(f"Starting Cross-Validation on {len(unique_esns)} engines: {unique_esns}")
+    
+    eval_esns = unique_esns
+    if limit_folds:
+        eval_esns = unique_esns[:limit_folds]
+        
+    print(f"Starting Cross-Validation on {len(eval_esns)} folds out of {len(unique_esns)} total engines")
     
     if do_plots:
         os.makedirs(plot_dir, exist_ok=True)
@@ -191,7 +196,7 @@ def evaluate_cv(df_raw, hyp: Hyperparameters, do_plots=False, plot_dir="./plots"
     target_cols = ["Cycles_to_WW", "Cycles_to_HPC_SV", "Cycles_to_HPT_SV"]
     results = []
     
-    for test_esn in unique_esns:
+    for test_esn in eval_esns:
         train_esns = [e for e in unique_esns if e != test_esn]
         print(f"\nProcessing Fold: Test ESN={test_esn}, Train ESNs={train_esns}")
         
@@ -349,16 +354,24 @@ def main():
     # Expose some hyperparameters as CLI args for quick sweeps
     parser.add_argument("--rf_n_estimators", type=int, default=50)
     parser.add_argument("--rf_max_depth", type=int, default=5)
-    parser.add_argument("--smoother_r_log", type=float, default=3.7, help="Log10 of R variance")
-    parser.add_argument("--smoother_q_log", type=float, default=0.0, help="Log10 of Q variance")
+    
+    # Kalman Filter params
+    parser.add_argument("--kf_process_noise", type=float, default=1e-4)
+    parser.add_argument("--kf_meas_noise", type=float, default=200.0)
+
+    # Smoother params
+    parser.add_argument("--smoother_r_variance", type=float, default=5000.0)
+    parser.add_argument("--smoother_q_variance", type=float, default=1.0)
     
     args = parser.parse_args()
     
     hyp = Hyperparameters(
         rf_n_estimators=args.rf_n_estimators,
         rf_max_depth=args.rf_max_depth,
-        smoother_r_variance=10**args.smoother_r_log,
-        smoother_q_variance=10**args.smoother_q_log
+        kf_process_noise=args.kf_process_noise,
+        kf_meas_noise=args.kf_meas_noise,
+        smoother_r_variance=args.smoother_r_variance,
+        smoother_q_variance=args.smoother_q_variance
     )
     
     # Load Data

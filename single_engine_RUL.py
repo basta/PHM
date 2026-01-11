@@ -257,7 +257,7 @@ def _(df_test, mo, plt, target_sensors):
 
                 lines = l1 + l2
                 labels = [l.get_label() for l in lines]
-                axes[i].legend(lines, labels, loc="upper left")
+                axes[i].legend(lines, labels, loc="lower right")
             else:
                 axes[i].legend(loc="upper left")
 
@@ -266,14 +266,14 @@ def _(df_test, mo, plt, target_sensors):
 
         plt.tight_layout()
         return fig
+    with plt.style.context({'font.size': 20, 'axes.titlesize': 18}):
+        output_list = [mo.md("### 2. Health Indicator State Evolution (Test Engine)")]
+        if df_test is not None and not df_test.empty and any(f"KF_Health_{s}" in df_test.columns for s in target_sensors):
+            output_list.append(plot_health(df_test, "Test Engine "))
+        else:
+            output_list.append(mo.md("No KF data for Test Engine."))
 
-    output_list = [mo.md("### 2. Health Indicator State Evolution (Test Engine)")]
-    if df_test is not None and not df_test.empty and any(f"KF_Health_{s}" in df_test.columns for s in target_sensors):
-        output_list.append(plot_health(df_test, "Test Engine "))
-    else:
-        output_list.append(mo.md("No KF data for Test Engine."))
-
-    output = mo.vstack(output_list)
+        output = mo.vstack(output_list)
     output
     return
 
@@ -455,8 +455,8 @@ def _(df_test, model_select, np, plt, target_cols, trained_models):
 
         plt.tight_layout()
         return fig
-
-    viz_output = visualize_model_test(selected_model_name, df_test, trained_models, target_cols)
+    with plt.style.context({'font.size': 20, 'axes.titlesize': 18}):
+        viz_output = visualize_model_test(selected_model_name, df_test, trained_models, target_cols)
     viz_output
     return (selected_model_name,)
 
@@ -619,15 +619,14 @@ def _(
             ax.plot(x_axis, plot_df[f"Smooth_{target}"], color="orange", linewidth=2.5, label="Filtered Prediction")
 
             ax.set_title(f"{target} Prediction")
-            ax.legend(loc="upper right")
             ax.grid(True, alpha=0.3)
             ax.set_ylabel("Cycles Remaining")
 
         axes[-1].set_xlabel("Current Cycle Time")
         plt.tight_layout()
         return fig, plot_df
-
-    viz_output_smoothed, smooth_plot_df = visualize_model_test_smooth(selected_model_name, df_test, trained_models, target_cols)
+    with plt.style.context({'font.size': 20, 'axes.titlesize': 18}):
+        viz_output_smoothed, smooth_plot_df = visualize_model_test_smooth(selected_model_name, df_test, trained_models, target_cols)
     viz_output_smoothed
     return (smooth_plot_df,)
 
@@ -674,7 +673,6 @@ def _(mo, np, smooth_plot_df, time_weighted_error):
     | | |
     | **FINAL SCORE** | **{final_competition_score:.6f}** |
     """)
-
     return
 
 
